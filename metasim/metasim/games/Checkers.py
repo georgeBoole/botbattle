@@ -1,49 +1,31 @@
 import random
-from collections import namedtuple
+from collections import namedtuple, defaultdict, Iterable
 from itertools import permutations
+import uuid
 
 BOARD_SIZE = 8
 DISCS_PER_PLAYER = 12
 COLORS = (RED, BLACK) = ('Red', 'Black')
-EMPTY, OCCUPIED = ('Empty', 'Occupied')
 KING_LOC = {RED:BOARD_SIZE-1, BLACK:0}
 SQUARE_STATES = (empty_red, empty_black, occupied_red, occupied_black) = ('=', '0', 'R', 'B')
+actions = (MOVE, JUMP) = ('move', 'jump')
+EMPTY = 'Empty'
+jump_tuple_fields = (source, dest, victim, stage) = ('jump source', 'jump dest', 'jump victim', 'jump stage')
 
-Piece = namedtuple('Piece', ['color', 'x', 'y', 'is_king'])
-Move = namedtuple('Move', ['piece', 'action', 'movement_path', 'pieces_removed', 'was_made_king'])
-actions = (MOVE, JUMP)
-
-def isodd(n):
-	return n % 2 == 1
-
-def color(x, y):
-	return BLACK if isodd(x) == isodd(y) else RED
-
-def game_over(grid, discs):
-	pass
-
-def valid_loc(r, t):
-	return r in legal_coords and t in legal_coords
-
-def dist(a, b):
-	ax, ay = a
-	bx, by = b
-	return abs(ax-bx) + abs(ay-by)
+isodd = lambda n: n % 2 == 1
+color = lambda x,y: BLACK if isodd(x) == isodd(y) else RED
+valid_loc = lambda r,t: r in legal_coords and t in legal_coords
+dist = lambda a,b: abs(a[0]-b[0]) + abs(a[1]-b[1])
 
 
-normal_movements = [ (-1, -1), (-1, 1), (1, 1), (1, -1) ]
-jump_movements = [ (-2,-2), (-2, 2), (2,2), (2,-2) ]
-legal_coords = range(BOARD_SIZE)
-
-def get_neighbors(x,y, distance=1, remove_invalid=True):
+def get_neighbors(x, y, distance=1,remove_invalid=True):
 	all_coords = [ (x+(dx*distance),y+(dy*distance)) for dx,dy in normal_movements]
 	return filter(lambda r,s: valid_loc(r,s), all_coords) if remove_invalid else all_coords
 
-
-def can_jump(jumper_color, from, over, to, omap):
-	if not valid_loc(to) or omap[to[0]][to[1]] != EMPTY:
+def can_jump(jumper_color, jumper_start, over, destination, omap):
+	if not valid_loc(destination) or omap[destination[0]][destination[1]] != EMPTY:
 		return False
-	return jumper_color != omap[over[0]][over[1]].color and dist(from,over) == 2 and dist(over,to) == 2 and dist(from,to) == 4
+	return jumper_color != omap[over[0]][over[1]].color and dist(jumper_start,over) == 2 and dist(over,destination) == 2 and dist(jumper_start,destination) == 4
 
 def build_jump(piece, hops):
 	s_hops = sorted(hops, key=lambda h: h[3])
@@ -52,8 +34,7 @@ def build_jump(piece, hops):
 	return Move(piece, JUMP, mpath, p_rem, mpath[-1] == KING_LOC[piece.color])
 
 
-jump_tuple_fields = (source, dest, victim, stage) = ('jump source', 'jump dest', 'jump victim', 'jump stage')
-# temporarily store jumps as (jump_source, jump_dest, jump_victim, jump_stage)
+
 def try_jump(piece, target, jumper, occupancy_map):
 	all_hops = _try_jump(piece.color, target, occupancy_map, 0)
 	if not all_hops:
@@ -88,18 +69,12 @@ def try_jump(piece, target, jumper, occupancy_map):
 			full_jumps.append(pj)
 	return full_jumps
 
-def layout_pieces():
-	# inclusive
-	rc_map = dict(zip(range(BOARD_SIZE), [RED] * 3 + [EMPTY] * 2 + [BLACK] * 3))
 
-	pieces = list()
-	for row in xrange(BOARD_SIZE):
-		row_color = rc_map[row]
-		if row_color == EMPTY:
-			continue
-		s = (row+1) % 2
-		pieces.extend([ rc_map[row], (2*n)+s, row ] for n in xrange(4))
-	return [ Piece(c, x, y, False) for c, x, y in pieces ]
+normal_movements = [ (-1, -1), (-1, 1), (1, 1), (1, -1) ]
+jump_movements = [ (-2,-2), (-2, 2), (2,2), (2,-2) ]
+legal_coords = range(BOARD_SIZE)
+
+
 
 def print_game(grid, pieces):
 	chr_map = { Disc:{RED:occupied_red, BLACK:occupied_black}, Cell:{RED:empty_red, BLACK:empty_black}}
@@ -117,49 +92,115 @@ def print_game(grid, pieces):
 
 	print '\n'.join([ '\t'.join(trans_gc[r]) for r in xrange(BOARD_SIZE)])
 
-def find_moves(color, pieces, occ_map):
-	all_moves = list()
-	for p in pieces:
-		normal_moves = [ (p.x + mx, p.y + my) for mx, my in normal_movements]
-		for nm_x, nm_y in normal_moves:
-			if occ_map[nm_x][nm_y] == EMPTY:
-				all_moves.append(Move(p, MOVE, ((nm_x, nm_y),), None, False))
-			elif occ_map[nm_x][nm_y].color != p.color:
-				jump_moves = try_jump(p, (nm_x, nm_y), (p.x, p.y), occ_map)
-				if jump_moves:
-					all_moves.extend(jump_moves)
-	return all_moves
+def layout_pieces():
+	# inclusive
+	rc_map = dict(zip(range(BOARD_SIZE), [RED] * 3 + [EMPTY] * 2 + [BLACK] * 3))
 
-def play_turn(active_player, game_state):
-	apc = colmap[active_player]
-	p_map = defaultdict(lambda: defaultdict(lambda: EMPTY))
-	for p in game_state:
-		p_map[p.x][p.y] = p
-	possible_moves = find_moves(apc, game_state, p_map)
-	chosen_move = active_player.select(possible_moves)
-	return apply_move(game_state)
+	pieces = list()
+	for row in xrange(BOARD_SIZE):
+		row_color = rc_map[row]
+		if row_color == EMPTY:
+			continue
+		s = (row+1) % 2
+		pieces.extend([ rc_map[row], (2*n)+s, row ] for n in xrange(4))
+	return [ Piece(c, x, y, False) for c, x, y in pieces ]
 
-def play_game(player1, player2):
-	players = [player1, player2]
-	colmap = dict(zip(COLORS, players))
 
-	first_player = random.choice(players)
-	turn_idx = 0
+Piece = namedtuple('Piece', ['color', 'x', 'y', 'is_king'])
+Move = namedtuple('Move', ['piece', 'action', 'movement_path', 'pieces_removed', 'was_made_king'])
 
-	initial_state = layout_pieces()
-	history = list()
+class Checkers(object):
 
-	game_state = initial_state
-	while not game_over():
-		active_player = players[(players.index(first_player) + turn_idx) % len(players)]
-		new_state = play_turn(active_player, game_state)
-		history.append({'turn_idx':turn_idx, 'active_player':active_player, 'state':new_state})
-		game_state = new_state
-		turn_idx += 1
-	print history
+	def __init__(self, bots):
+		self.players = bots
+		self.initial_state = layout_pieces()
+		self.final_state = None
+		self.turn = 0
+		self.game_over = False
+		self.piece_count = dict(zip(COLORS, [12] * 2))
+
+	def run(self):
+		self.play_game()
+
+	def color_this_turn(self):
+		return RED if isodd(self.turn_idx) else BLACK
+
+	def play_game(self):
+		#self.first_player = #random.choice(self.players)
+		#turn_order = sorted(zip(self.players, [ random.random() for p in self.players ]), key=lambda y: y[1])
+		#print turn_order
+		#print self.players[0] in turn_order
+		#self.first_player = [ self.players[r] for r in ]
+
+		self.turn_idx = 0
+		#active_player = lambda: self.players[(self.players.index(self.first_player) + self.turn_idx) % len(self.players)]
+		initial_state = layout_pieces()
+
+		game_state = initial_state
+		active_player = None
+		self.first_player = self.players[0]
+		while not self.game_over:
+			active_player = self.first_player if not self.first_player else filter(lambda b: b != self.first_player, self.players).pop()
+			game_state = self.play_turn(active_player, game_state)
+
+			self.turn_idx += 1
+		self.final_state = game_state
+
+	def find_moves(self, color, pieces, occ_map):
+		all_moves = list()
+		for p in pieces:
+			normal_moves = [ (p.x + mx, p.y + my) for mx, my in normal_movements]
+			for nm_x, nm_y in normal_moves:
+				if occ_map[nm_x][nm_y] == EMPTY:
+					all_moves.append(Move(p, MOVE, ((nm_x, nm_y),), None, False))
+				elif occ_map[nm_x][nm_y].color != p.color:
+					jump_moves = try_jump(p, (nm_x, nm_y), (p.x, p.y), occ_map)
+					if jump_moves:
+						all_moves.extend(jump_moves)
+		if not all_moves:
+			self.game_over = True
+		return all_moves
+
+	def apply_move(self, move, pieces):
+		dead_pieces = []
+		if move.pieces_removed:
+			dead_pieces = filter(lambda ded_pc: ded_pc, move.pieces_removed)
+			if dead_pieces:
+				for dp in dead_pieces:
+					self.piece_count[dp.color] =- 1
+		m = move
+		dx, dy = m.movement_path[-1] if isinstance(m.movement_path, Iterable) else m.movement_path
+		replacement_piece = Piece(m.piece.color, dx, dy, m.was_made_king)
+		return filter(lambda p: not p in dead_pieces, map(lambda q: replacement_piece if m.piece == q else q, pieces ))
+
+	def play_turn(self, active_player, game_state):
+		print 'Beginning turn %d, %s turn' % (self.turn_idx, active_player.name)
+		p_map = defaultdict(lambda: defaultdict(lambda: EMPTY))
+		for p in game_state:
+			p_map[p.x][p.y] = p
+
+		#print 'active player is %s and is found in the color dict? %s' % (active_player.name, active_player in self.player_color)
+		possible_moves = self.find_moves(self.color_this_turn, game_state, p_map)
+		chosen_move = active_player.select(possible_moves)
+		return self.apply_move(chosen_move, game_state)
+
+
+class CheckersBot(object):
+
+	def __init__(self, name='robot'):
+		self.name = name
+
+	def select(self, possible_moves):
+		return random.choice(possible_moves)
 
 def main():
-	play_game('mike','katie')
+	#play_game('mike','katie')
+	bots = [ CheckersBot(n) for n in ('mike', 'karn')]
+	fun_game = Checkers(bots)
+	fun_game.run()
+
+
+
 
 if __name__ == '__main__':
 	main()
