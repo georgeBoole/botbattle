@@ -16,14 +16,16 @@ isodd = lambda n: n % 2 == 1
 color = lambda x,y: BLACK if isodd(x) == isodd(y) else RED
 valid_loc = lambda r,t: r in legal_coords and t in legal_coords
 dist = lambda a,b: abs(a[0]-b[0]) + abs(a[1]-b[1])
-
+def midpoint(start_point, end_point):
+	sx, sy, ex, ey = start_point + end_point
+	return [ v/2 for v in (sx+ex, sy+ey)]
 
 def get_neighbors(x, y, distance=1,remove_invalid=True):
 	all_coords = [ (x+(dx*distance),y+(dy*distance)) for dx,dy in normal_movements]
 	return filter(lambda r,s: valid_loc(r,s), all_coords) if remove_invalid else all_coords
 
 def can_jump(jumper_color, jumper_start, over, destination, omap):
-	if not valid_loc(destination) or omap[destination[0]][destination[1]] != EMPTY:
+	if not valid_loc(*destination) or omap[destination[0]][destination[1]] != EMPTY:
 		return False
 	return jumper_color != omap[over[0]][over[1]].color and dist(jumper_start,over) == 2 and dist(over,destination) == 2 and dist(jumper_start,destination) == 4
 
@@ -33,10 +35,25 @@ def build_jump(piece, hops):
 	p_rem = [ hp[2] for hp in s_hops ]
 	return Move(piece, JUMP, mpath, p_rem, mpath[-1] == KING_LOC[piece.color])
 
+def valid_nonjump_move(piece, start_location, end_location):
+
+
+
+def _try_jump(piece, target, occupancy_map, stage):
+	src = piece.x, piece.y
+	dst = target
+	btwn = midpoint(src, dst)
+	stg = stage
+	hops = list()
+	while can_jump(piece.color, src, btwn, dst, occupancy_map):
+		hops.append((src, dst, occupancy_map[btwn[0]][btwn[1]], stg))
+		stg += 1
+		src = dst
+
 
 
 def try_jump(piece, target, jumper, occupancy_map):
-	all_hops = _try_jump(piece.color, target, occupancy_map, 0)
+	all_hops = _try_jump(piece, target, occupancy_map, 0)
 	if not all_hops:
 		return None
 	# determine max stage and break down hops by stage
@@ -108,6 +125,7 @@ def layout_pieces():
 
 Piece = namedtuple('Piece', ['color', 'x', 'y', 'is_king'])
 Move = namedtuple('Move', ['piece', 'action', 'movement_path', 'pieces_removed', 'was_made_king'])
+TURN_LIMIT = 5
 
 class Checkers(object):
 
@@ -126,31 +144,24 @@ class Checkers(object):
 		return RED if isodd(self.turn_idx) else BLACK
 
 	def play_game(self):
-		#self.first_player = #random.choice(self.players)
-		#turn_order = sorted(zip(self.players, [ random.random() for p in self.players ]), key=lambda y: y[1])
-		#print turn_order
-		#print self.players[0] in turn_order
-		#self.first_player = [ self.players[r] for r in ]
-
 		self.turn_idx = 0
-		#active_player = lambda: self.players[(self.players.index(self.first_player) + self.turn_idx) % len(self.players)]
 		initial_state = layout_pieces()
 
 		game_state = initial_state
 		active_player = None
 		self.first_player = self.players[0]
 		while not self.game_over:
-			active_player = self.first_player if not self.first_player else filter(lambda b: b != self.first_player, self.players).pop()
+			active_player = self.first_player if active_player != self.first_player else filter(lambda b: b != self.first_player, self.players).pop()
 			game_state = self.play_turn(active_player, game_state)
 
 			self.turn_idx += 1
 		self.final_state = game_state
 
+	@rules_enforced
 	def find_moves(self, color, pieces, occ_map):
 		all_moves = list()
 		for p in pieces:
-			normal_moves = [ (p.x + mx, p.y + my) for mx, my in normal_movements]
-			for nm_x, nm_y in normal_moves:
+			for nm_x, nm_y in get_neighbors(p.x, p.y):
 				if occ_map[nm_x][nm_y] == EMPTY:
 					all_moves.append(Move(p, MOVE, ((nm_x, nm_y),), None, False))
 				elif occ_map[nm_x][nm_y].color != p.color:
