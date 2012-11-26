@@ -1,21 +1,17 @@
 import random
 from collections import namedtuple, defaultdict, Iterable
-from itertools import permutations
-import uuid
 
 BOARD_SIZE = 8
 DISCS_PER_PLAYER = 12
 COLORS = (RED, BLACK) = ('Red', 'Black')
-KING_LOC = {RED:BOARD_SIZE-1, BLACK:0}
-SQUARE_STATES = (empty_red, empty_black, occupied_red, occupied_black) = ('=', '0', 'R', 'B')
 actions = (MOVE, JUMP) = ('move', 'jump')
 EMPTY = 'Empty'
-jump_tuple_fields = (source, dest, victim, stage) = ('jump source', 'jump dest', 'jump victim', 'jump stage')
 
 isodd = lambda n: n % 2 == 1
 tile_color = lambda x,y: BLACK if isodd(x) == isodd(y) else RED
 valid_loc = lambda r,t: r in legal_coords and t in legal_coords
 dist = lambda a,b: abs(a[0]-b[0]) + abs(a[1]-b[1])
+
 def midpoint(start_point, end_point):
 	sx, sy, ex, ey = start_point + end_point
 	return ((sx+ex)/2, (sy+ey)/2)
@@ -35,24 +31,6 @@ normal_movements = [ (-1, -1), (-1, 1), (1, 1), (1, -1) ]
 jump_movements = [ (-2,-2), (-2, 2), (2,2), (2,-2) ]
 legal_coords = range(BOARD_SIZE)
 
-
-
-def print_game(grid, pieces):
-	chr_map = { Disc:{RED:occupied_red, BLACK:occupied_black}, Cell:{RED:empty_red, BLACK:empty_black}}
-	get_char = lambda c: chr_map[type(c)][c.color]
-	grid_chars = [ [get_char(grid[x][y]) for x in xrange(BOARD_SIZE)] for y in xrange(BOARD_SIZE)]
-
-	for p in pieces:
-		pc = get_char(p)
-		grid_chars[p.location.x][p.location.y] = pc
-
-	trans_gc = [ [EMPTY] * BOARD_SIZE for q in xrange(BOARD_SIZE)]
-	for x in xrange(BOARD_SIZE):
-		for y in xrange(BOARD_SIZE):
-			trans_gc[x][y] = grid_chars[y][x]
-
-	print '\n'.join([ '\t'.join(trans_gc[r]) for r in xrange(BOARD_SIZE)])
-
 def layout_pieces():
 	# inclusive
 	rc_map = dict(zip(range(BOARD_SIZE), [RED] * 3 + [EMPTY] * 2 + [BLACK] * 3))
@@ -67,8 +45,7 @@ def layout_pieces():
 	return [ Piece(c, x, y, False) for c, x, y in pieces ]
 
 Piece = namedtuple('Piece', ['color', 'x', 'y', 'is_king'])
-Move = namedtuple('Move', ['piece', 'action', 'movement_path', 'was_made_king',])
-TURN_LIMIT = 5
+Move = namedtuple('Move', ['piece', 'action', 'movement_path', 'was_made_king'])
 
 class Checkers(object):
 
@@ -80,6 +57,8 @@ class Checkers(object):
 		self.game_over = False
 		self.piece_count = dict(zip(COLORS, [12] * 2))
 		self.color_map = dict(zip([BLACK, RED], self.players))
+		self.loser = None
+		self.winner = None
 
 	def run(self):
 		return self.play_game()
@@ -91,22 +70,22 @@ class Checkers(object):
 		self.turn_idx = 0
 		initial_state = layout_pieces()
 
+		game_record = list()
 		game_state = initial_state
+		game_record.append((game_state, None))
 		last_size = len(game_state)
 		while not self.game_over:
-			game_state = self.play_turn(BLACK if self.turn_idx % 2 == 0 else RED, game_state)
-			new_size = len(game_state)
-			if new_size < last_size:
-				print '%d pieces left' % new_size
-				last_size = new_size
-			#if self.turn_idx > 0 and self.turn_idx % 10 == 0:
-				#print 'Done with %d turns' % self.turn_idx
+			game_state, move = self.play_turn(BLACK if self.turn_idx % 2 == 0 else RED, game_state)
+			game_record.append((game_state, move))
 			self.turn_idx += 1
 
 		self.final_state = game_state
-		return game_state
+		if self.loser:
+			self.winner = BLACK if self.loser == RED else RED
+		return game_record
 
-	def find_piece_moves(self, piece, occupancy_map):
+	@classmethod
+	def find_piece_moves(cls, piece, occupancy_map):
 		moves = list()
 		#print str(legally_directed_neighbors(piece.color, piece.x, piece.y, d=2, all_le_d=True))
 		for d1n, d2n in legally_directed_neighbors(piece.color, piece.x, piece.y, d=2, all_le_d=True):
@@ -122,17 +101,21 @@ class Checkers(object):
 				occupancy_map_copy[d2x][d2y] = fp
 				occupancy_map_copy[d1x][d1y] = EMPTY
 				occupancy_map_copy[piece.x][piece.y] = EMPTY
-				nbr_jumps = filter(lambda x: x.action == JUMP, self.find_piece_moves(fp, occupancy_map_copy))
+				nbr_jumps = filter(lambda x: x.action == JUMP, cls.find_piece_moves(fp, occupancy_map_copy))
 				if nbr_jumps:
 					moves.extend([ Move(piece, JUMP, [d2n] + nj.movement_path, fp.is_king or nj.was_made_king) for nj in nbr_jumps])
 				else:
 					moves.append(Move(piece, JUMP, [d2n], fp.is_king))
 		return moves
 
+	@classmethod
+	def all_moves(cls, color, pieces, occ_map):
+		return reduce(lambda x,y: x + y, map(lambda p: cls.find_piece_moves(p, occ_map), filter(lambda ap: ap.color == color, pieces)))
+
 	def find_moves(self, move_color, pieces, occ_map):
-		all_moves = reduce(lambda x,y: x + y, map(lambda p: self.find_piece_moves(p, occ_map), filter(lambda ap: ap.color == move_color, pieces)))
+		all_moves = Checkers.all_moves(move_color, pieces, occ_map)
 		if not all_moves:
-			self.game_over = True
+			return None
 		has_jump = False
 		for m in all_moves:
 			if m.action == JUMP:
@@ -158,6 +141,7 @@ class Checkers(object):
 				if len(found_colors) == 2:
 					break
 		if len(found_colors) < 2:
+			self.loser = RED if BLACK == move.piece.color else BLACK
 			self.game_over = True
 		return new_pieces
 
@@ -168,18 +152,18 @@ class Checkers(object):
 
 		possible_moves = self.find_moves(player_color, game_state, new_occupancy_map)
 		if not possible_moves:
-			print 'didn\'t find any moves for %s' % player_color
-			return game_state
-		#else:
-			#print 'found some moves: %s' % str(possible_moves)
+			self.game_over = True
+			self.loser = player_color
+			return game_state, None
+
 		chosen_move = self.color_map[player_color].select(possible_moves)
+
 		if chosen_move:
-			#if chosen_move.action == JUMP:
-				#print 'CHOSE A JUMP WOO HOO %s' % str(chosen_move)
-			return self.apply_move(chosen_move, game_state)
+			return self.apply_move(chosen_move, game_state), chosen_move
 		else:
 			self.game_over = True
-			return game_state
+			self.loser = player_color
+			return game_state, None
 
 
 class CheckersBot(object):
@@ -191,14 +175,13 @@ class CheckersBot(object):
 		return random.choice(possible_moves)
 
 def main():
-	#play_game('mike','katie')
 	bots = [ CheckersBot(n) for n in ('mike', 'karn')]
 	fun_game = Checkers(bots)
-	final_state = fun_game.run()
-	#print 'final state is: %s' % str(final_state)
-	for p in final_state:
-		print '(%d,%d)\t%s\tking?: %s' % (p.x, p.y, p.color, p.is_king)
-
+	game_record = fun_game.run()
+	#for item in game_record:
+	#	print item
+	print 'winner of the game was %s' % fun_game.winner
+	print 'loser of the game was %s' % fun_game.loser
 
 
 
